@@ -136,8 +136,47 @@ db.serialize(() => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         word_id INTEGER,
-        status TEXT, -- 'learned', 'mastered'
+        status TEXT, -- 'learned', 'skipped'
+        interval_days INTEGER DEFAULT 1,
+        next_review_at DATETIME,
+        review_count INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(word_id) REFERENCES words(id)
+    )`);
+
+    // Migration: Add spaced-repetition columns to learning_history if they don't exist
+    db.all("PRAGMA table_info(learning_history)", (err, columns) => {
+        if (err) {
+            console.error('Error checking learning_history table info:', err);
+            return;
+        }
+        const lhColumnNames = columns.map(c => c.name);
+
+        const addColumnIfMissing = (colName, colDef) => {
+            if (!lhColumnNames.includes(colName)) {
+                db.run(`ALTER TABLE learning_history ADD COLUMN ${colName} ${colDef}`, (alterErr) => {
+                    if (alterErr) console.error(`Error adding ${colName} column:`, alterErr);
+                    else console.log(`Added ${colName} column to learning_history table`);
+                });
+            }
+        };
+
+        addColumnIfMissing('interval_days', 'INTEGER DEFAULT 1');
+        addColumnIfMissing('next_review_at', 'DATETIME');
+        addColumnIfMissing('review_count', 'INTEGER DEFAULT 0');
+    });
+
+    // Review answers table - records each answer during review sessions
+    db.run(`CREATE TABLE IF NOT EXISTS review_answers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        session_id TEXT,
+        user_id INTEGER,
+        word_id INTEGER,
+        selected_option TEXT,
+        is_correct INTEGER,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id),
         FOREIGN KEY(word_id) REFERENCES words(id)
     )`);
