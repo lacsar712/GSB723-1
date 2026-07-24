@@ -3,6 +3,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./database');
+const reviewEngine = require('./reviewEngine');
 const app = express();
 const PORT = 3000;
 const SECRET_KEY = "supersecretkey_vocabulary_1209"; // In prod, use .env
@@ -274,10 +275,18 @@ app.get('/api/recommend/batch', authenticate, (req, res) => {
 
 // Mark word as learned
 app.post('/api/learn/record', authenticate, (req, res) => {
-    const { word_id, status } = req.body; // status: 'learned'
-    db.run("INSERT INTO learning_history (user_id, word_id, status) VALUES (?, ?, ?)", [req.user.id, word_id, status || 'learned'], (err) => {
+    const { word_id, status } = req.body; // status: 'learned' or 'skipped'
+    const finalStatus = status || 'learned';
+    db.run("INSERT INTO learning_history (user_id, word_id, status) VALUES (?, ?, ?)", [req.user.id, word_id, finalStatus], function (err) {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
+        if (finalStatus === 'learned') {
+            reviewEngine.initializeLearningSchedule(req.user.id, word_id, (initErr) => {
+                if (initErr) console.error('Failed to initialize review schedule:', initErr);
+                res.json({ success: true });
+            });
+        } else {
+            res.json({ success: true });
+        }
     });
 });
 
@@ -294,6 +303,52 @@ app.get('/api/stats', authenticate, (req, res) => {
     db.all(sql, [req.user.id], (err, rows) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ learned_count: rows.length, history: rows });
+    });
+});
+
+
+// Spaced Repetition Review Routes
+app.get('/api/review/start', authenticate, (req, res) => {
+    const batchSize = parseInt(req.query.limit) || reviewEngine.DEFAULT_BATCH_SIZE;
+    reviewEngine.buildReviewBatch(req.user.id, batchSize, (err, result) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(result);
+    });
+});
+
+app.post('/api/review/answer', authenticate, (req, res) => {
+    const { sessionId, wordId, selectedOption, correctWord } = req.body;
+    if (!sessionId || !wordId || selectedOption === undefined || !correctWord) {
+        return res.status(400).json({ error: 'Missing required fields: sessionId, wordId, selectedOption, correctWord' });
+    }
+    const isCorrect = String(selectedOption).trim().toLowerCase() === String(correctWord).trim().toLowerCase();
+
+    reviewEngine.recordAnswer(sessionId, req.user.id, wordId, selectedOption, isCorrect, (recErr) => {
+        if (recErr) return res.status(500).json({ error: recErr.message });
+        reviewEngine.updateLearningSchedule(req.user.id, wordId, isCorrect, (schedErr, schedule) => {
+            if (schedErr) return res.status(500).json({ error: schedErr.message });
+            res.json({
+                isCorrect,
+                correctWord,
+                intervalDays: schedule.intervalDays,
+                nextReviewAt: schedule.nextReviewAt,
+                dueImmediately: schedule.dueImmediately
+            });
+        });
+    });
+});
+
+app.get('/api/review/results/:sessionId', authenticate, (req, res) => {
+    reviewEngine.getSessionResults(req.params.sessionId, req.user.id, (err, results) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(results);
+    });
+});
+
+app.get('/api/review/stats', authenticate, (req, res) => {
+    reviewEngine.getReviewStats(req.user.id, (err, stats) => {
+        if (err) return res.status(500).json({ error: err.message });
+        res.json(stats);
     });
 });
 

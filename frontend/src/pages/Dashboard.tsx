@@ -1,10 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import api from '../api';
-import { CheckCircle, BarChart2, Book, Volume2, LogOut, RefreshCw } from 'lucide-react';
-import { motion } from 'framer-motion';
+import api, { reviewApi } from '../api';
+import type { ReviewStats } from '../api';
+import { CheckCircle, BarChart2, Book, Volume2, LogOut, RefreshCw, BrainCircuit, ListChecks } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import ReviewQuiz from './ReviewQuiz';
 
 interface RecommendedWord {
     id: number;
@@ -18,13 +20,23 @@ interface RecommendedWord {
     difficulty_level?: number;
 }
 
+interface HistoryItem {
+    id: number;
+    word: string;
+    pronunciation: string;
+    definition: string;
+    status: string;
+}
+
 const Dashboard: React.FC = () => {
     const { user, logout } = useAuth();
     const [word, setWord] = useState<RecommendedWord | null>(null);
     const [stats, setStats] = useState<any>([]);
+    const [reviewStats, setReviewStats] = useState<ReviewStats>({ dueCount: 0, totalLearned: 0 });
     const [loading, setLoading] = useState(true);
-    const [showReview, setShowReview] = useState(false); // Added showReview state
-    const navigate = useNavigate(); // Initialized useNavigate
+    const [showWordList, setShowWordList] = useState(false);
+    const [showQuiz, setShowQuiz] = useState(false);
+    const navigate = useNavigate();
 
     const fetchRecommendation = async () => {
         try {
@@ -38,7 +50,6 @@ const Dashboard: React.FC = () => {
     const fetchStats = async () => {
         try {
             const res = await api.get('/stats');
-            // Store full history for review
             const history = res.data.history;
             setStats({
                 chartData: history.map((_: any, i: number) => ({ name: `Day ${i + 1}`, words: i + 1 })),
@@ -47,6 +58,15 @@ const Dashboard: React.FC = () => {
         } catch (e) { console.error(e); }
     };
 
+    const fetchReviewStats = useCallback(async () => {
+        try {
+            const data = await reviewApi.stats();
+            setReviewStats(data);
+        } catch (e) {
+            console.error(e);
+        }
+    }, []);
+
     const handleLogout = () => {
         logout();
         navigate('/login');
@@ -54,7 +74,7 @@ const Dashboard: React.FC = () => {
 
     const refreshData = () => {
         setLoading(true);
-        Promise.all([fetchRecommendation(), fetchStats()]).then(() => setLoading(false));
+        Promise.all([fetchRecommendation(), fetchStats(), fetchReviewStats()]).then(() => setLoading(false));
     };
 
     useEffect(() => {
@@ -67,22 +87,31 @@ const Dashboard: React.FC = () => {
             await api.post('/learn/record', { word_id: word.id, status: 'learned' });
             await fetchRecommendation();
             await fetchStats();
+            await fetchReviewStats();
         } catch (e) { console.error(e); }
     };
 
     const handleSkip = async () => {
         if (!word) return;
         try {
-            // Mark as skipped so it doesn't appear again immediately
             await api.post('/learn/record', { word_id: word.id, status: 'skipped' });
             await fetchRecommendation();
         } catch (e) { console.error(e); }
     };
 
-    const playAudio = (text?: string) => { // Modified playAudio to accept optional text
+    const playAudio = (text?: string) => {
+        if (!('speechSynthesis' in window)) return;
+        window.speechSynthesis.cancel();
         const utter = new SpeechSynthesisUtterance(text || word?.word || '');
+        utter.lang = 'en-US';
         window.speechSynthesis.speak(utter);
     };
+
+    const handleQuizFinish = useCallback(() => {
+        fetchStats();
+        fetchReviewStats();
+        fetchRecommendation();
+    }, [fetchReviewStats]);
 
     if (loading) return <div className="p-8 text-center text-white">加载主页中...</div>;
 
@@ -139,7 +168,7 @@ const Dashboard: React.FC = () => {
                                     <h2 className="text-6xl font-bold text-white tracking-tight">{word.word}</h2>
                                     <span className="text-2xl text-slate-400 italic font-serif">{word.pos}</span>
                                 </div>
-                                <div className="flex items-center gap-2 text-primary cursor-pointer hover:text-indigo-400 transition" onClick={() => playAudio()}> {/* Updated playAudio call */}
+                                <div className="flex items-center gap-2 text-primary cursor-pointer hover:text-indigo-400 transition" onClick={() => playAudio()}>
                                     <Volume2 size={24} />
                                     <span className="text-lg font-mono">{word.pronunciation}</span>
                                 </div>
@@ -158,11 +187,11 @@ const Dashboard: React.FC = () => {
                             </div>
 
                             <div className="flex gap-4">
-                                <button onClick={handleLearn} className="btn-primary flex-1 flex items-center justify-center gap-2 py-4 text-lg">
+                                <button onClick={handleLearn} className="btn-primary flex-1 flex items-center justify-center gap-2 py-4 text-lg cursor-pointer">
                                     <CheckCircle size={24} />
                                     标为已掌握
                                 </button>
-                                <button onClick={handleSkip} className="btn-secondary px-6" title="跳过">
+                                <button onClick={handleSkip} className="btn-secondary px-6 cursor-pointer" title="跳过">
                                     <Book size={24} />
                                 </button>
                             </div>
@@ -183,7 +212,7 @@ const Dashboard: React.FC = () => {
                         </h3>
                         <div className="h-48 w-full">
                             <ResponsiveContainer width="100%" height="100%">
-                                <LineChart data={stats.chartData ? stats.chartData : [{ name: 'Start', words: 0 }]}> {/* Updated data prop */}
+                                <LineChart data={stats.chartData ? stats.chartData : [{ name: 'Start', words: 0 }]}>
                                     <XAxis dataKey="name" hide />
                                     <YAxis hide />
                                     <Tooltip
@@ -195,7 +224,7 @@ const Dashboard: React.FC = () => {
                         </div>
                         <div className="flex justify-between mt-4 text-sm text-slate-400">
                             <span>今日已学</span>
-                            <span className="text-white font-bold">{stats.history ? stats.history.length : 0} 词</span> {/* Updated count */}
+                            <span className="text-white font-bold">{stats.history ? stats.history.length : 0} 词</span>
                         </div>
                     </div>
 
@@ -203,15 +232,41 @@ const Dashboard: React.FC = () => {
                         <h3 className="text-lg font-bold text-white mb-4">快捷操作</h3>
                         <div className="space-y-3">
                             <button
-                                onClick={() => setShowReview(true)} // Added onClick handler
-                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3"
+                                onClick={() => setShowQuiz(true)}
+                                className="w-full text-left p-4 rounded-xl bg-gradient-to-r from-primary/20 to-secondary/20 hover:from-primary/30 hover:to-secondary/30 border border-primary/30 transition text-white flex items-center gap-3 group cursor-pointer"
+                            >
+                                <span className="w-9 h-9 rounded-lg bg-primary/30 flex items-center justify-center group-hover:bg-primary/50 transition">
+                                    <BrainCircuit size={18} className="text-primary" />
+                                </span>
+                                <div className="flex-1">
+                                    <div className="font-bold">复习自测</div>
+                                    <div className="text-xs text-slate-400">
+                                        {reviewStats.dueCount > 0
+                                            ? `${reviewStats.dueCount} 个单词到期待复习`
+                                            : reviewStats.totalLearned > 0
+                                                ? '暂无到期，可随时自测'
+                                                : '掌握单词后即可复习'}
+                                    </div>
+                                </div>
+                                {reviewStats.dueCount > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full bg-accent text-white text-xs font-bold animate-pulse">
+                                        {reviewStats.dueCount}
+                                    </span>
+                                )}
+                            </button>
+
+                            <button
+                                onClick={() => setShowWordList(true)}
+                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3 cursor-pointer"
                             >
                                 <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                                复习已掌握单词
+                                <ListChecks size={16} className="text-slate-400" />
+                                查看已掌握单词
                             </button>
+
                             <button
-                                onClick={() => navigate('/test')} // Added onClick handler
-                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3"
+                                onClick={() => navigate('/test')}
+                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3 cursor-pointer"
                             >
                                 <span className="w-2 h-2 rounded-full bg-amber-400"></span>
                                 重测词汇量
@@ -220,35 +275,59 @@ const Dashboard: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Review Modal */}
-                {showReview && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setShowReview(false)}>
-                        <div className="glass-panel bg-slate-900 p-6 rounded-2xl w-full max-w-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-                            <div className="flex justify-between items-center mb-6">
-                                <h2 className="text-2xl font-bold text-white">已掌握单词</h2>
-                                <button onClick={() => setShowReview(false)} className="text-slate-400 hover:text-white">✕</button>
-                            </div>
-                            <div className="space-y-4">
-                                {stats.history && stats.history.length > 0 ? (
-                                    stats.history.map((h: any, i: number) => (
-                                        <div key={i} className="p-4 bg-slate-800 rounded-lg border border-slate-700">
-                                            <div className="flex justify-between items-start">
-                                                <div>
-                                                    <h3 className="text-xl font-bold text-white">{h.word}</h3>
-                                                    <p className="text-primary text-sm">{h.pronunciation}</p>
+                <AnimatePresence>
+                    {showWordList && (
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="fixed inset-0 z-40 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+                            onClick={() => setShowWordList(false)}
+                        >
+                            <motion.div
+                                initial={{ scale: 0.95, opacity: 0 }}
+                                animate={{ scale: 1, opacity: 1 }}
+                                exit={{ scale: 0.95, opacity: 0 }}
+                                className="glass-panel bg-slate-900 p-6 rounded-2xl w-full max-w-lg max-h-[80vh] overflow-y-auto"
+                                onClick={e => e.stopPropagation()}
+                            >
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="text-2xl font-bold text-white">已掌握单词</h2>
+                                    <button onClick={() => setShowWordList(false)} className="text-slate-400 hover:text-white cursor-pointer">✕</button>
+                                </div>
+                                <div className="space-y-4">
+                                    {stats.history && stats.history.length > 0 ? (
+                                        stats.history.map((h: HistoryItem, i: number) => (
+                                            <div key={i} className="p-4 bg-slate-800 rounded-lg border border-slate-700">
+                                                <div className="flex justify-between items-start">
+                                                    <div>
+                                                        <h3 className="text-xl font-bold text-white">{h.word}</h3>
+                                                        <p className="text-primary text-sm">{h.pronunciation}</p>
+                                                    </div>
+                                                    <button onClick={() => playAudio(h.word)} className="text-slate-400 hover:text-primary cursor-pointer">
+                                                        <Volume2 size={18} />
+                                                    </button>
                                                 </div>
-                                                <button onClick={() => playAudio(h.word)} className="text-slate-400 hover:text-primary"><Volume2 size={18} /></button>
+                                                <p className="text-slate-300 mt-2 text-sm">{h.definition}</p>
                                             </div>
-                                            <p className="text-slate-300 mt-2 text-sm">{h.definition}</p>
-                                        </div>
-                                    ))
-                                ) : (
-                                    <div className="text-center text-slate-500 py-8">暂无已学单词，快去学习吧！</div>
-                                )}
-                            </div>
-                        </div>
-                    </div>
-                )}
+                                        ))
+                                    ) : (
+                                        <div className="text-center text-slate-500 py-8">暂无已学单词，快去学习吧！</div>
+                                    )}
+                                </div>
+                            </motion.div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                    {showQuiz && (
+                        <ReviewQuiz
+                            onClose={() => setShowQuiz(false)}
+                            onFinished={handleQuizFinish}
+                        />
+                    )}
+                </AnimatePresence>
             </div>
         </div>
     );
