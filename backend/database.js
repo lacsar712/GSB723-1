@@ -136,11 +136,45 @@ db.serialize(() => {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         word_id INTEGER,
-        status TEXT, -- 'learned', 'mastered'
+        status TEXT, -- 'learned', 'skipped'
+        last_interval INTEGER DEFAULT 0,
+        next_review_at DATETIME,
+        review_count INTEGER DEFAULT 0,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id),
         FOREIGN KEY(word_id) REFERENCES words(id)
     )`);
+
+    // Migration: Add spaced repetition columns if they don't exist
+    db.all("PRAGMA table_info(learning_history)", (err, columns) => {
+        if (err) {
+            console.error('Error checking learning_history table info:', err);
+            return;
+        }
+
+        const columnNames = columns.map(c => c.name);
+
+        if (!columnNames.includes('last_interval')) {
+            db.run("ALTER TABLE learning_history ADD COLUMN last_interval INTEGER DEFAULT 0", (err) => {
+                if (err) console.error('Error adding last_interval column:', err);
+                else console.log('Added last_interval column to learning_history table');
+            });
+        }
+
+        if (!columnNames.includes('next_review_at')) {
+            db.run("ALTER TABLE learning_history ADD COLUMN next_review_at DATETIME", (err) => {
+                if (err) console.error('Error adding next_review_at column:', err);
+                else console.log('Added next_review_at column to learning_history table');
+            });
+        }
+
+        if (!columnNames.includes('review_count')) {
+            db.run("ALTER TABLE learning_history ADD COLUMN review_count INTEGER DEFAULT 0", (err) => {
+                if (err) console.error('Error adding review_count column:', err);
+                else console.log('Added review_count column to learning_history table');
+            });
+        }
+    });
 
     // Seed Data with UPSERT - delay to ensure migration completes
     setTimeout(() => {
