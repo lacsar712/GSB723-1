@@ -3,6 +3,7 @@ const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./database');
+const reviewEngine = require('./reviewEngine');
 const app = express();
 const PORT = 3000;
 const SECRET_KEY = "supersecretkey_vocabulary_1209"; // In prod, use .env
@@ -274,10 +275,24 @@ app.get('/api/recommend/batch', authenticate, (req, res) => {
 
 // Mark word as learned
 app.post('/api/learn/record', authenticate, (req, res) => {
-    const { word_id, status } = req.body; // status: 'learned'
-    db.run("INSERT INTO learning_history (user_id, word_id, status) VALUES (?, ?, ?)", [req.user.id, word_id, status || 'learned'], (err) => {
-        if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
+    const { word_id, status } = req.body;
+    const isLearned = (status || 'learned') === 'learned';
+    const nextReviewSql = isLearned ? ", next_review_at = datetime('now', '+1 day'), last_interval = 1" : "";
+
+    db.get("SELECT id FROM learning_history WHERE user_id = ? AND word_id = ?", [req.user.id, word_id], (err, existing) => {
+        if (existing) {
+            db.run(`UPDATE learning_history SET status = ?, updated_at = CURRENT_TIMESTAMP ${nextReviewSql} WHERE id = ?`,
+                [status || 'learned', existing.id], (err) => {
+                    if (err) return res.status(500).json({ error: err.message });
+                    res.json({ success: true });
+                });
+        } else {
+            db.run(`INSERT INTO learning_history (user_id, word_id, status${isLearned ? ', next_review_at, last_interval' : ''}) VALUES (?, ?, ?${isLearned ? ", datetime('now', '+1 day'), 1" : ""})`,
+                [req.user.id, word_id, status || 'learned'], (err) => {
+                    if (err) return res.status(500).json({ error: err.message });
+                    res.json({ success: true });
+                });
+        }
     });
 });
 
@@ -295,6 +310,69 @@ app.get('/api/stats', authenticate, (req, res) => {
         if (err) return res.status(500).json({ error: err.message });
         res.json({ learned_count: rows.length, history: rows });
     });
+});
+
+// Spaced Repetition Review API
+app.get('/api/review/quiz', authenticate, async (req, res) => {
+    try {
+        const quizSize = parseInt(req.query.size) || reviewEngine.DEFAULT_QUIZ_SIZE;
+        const learnedCount = await reviewEngine.getLearnedCount(req.user.id);
+
+        if (learnedCount === 0) {
+            return res.json({ questions: [], hasWords: false });
+        }
+
+        const questions = await reviewEngine.getQuizQuestions(req.user.id, quizSize);
+        res.json({ questions, hasWords: questions.length > 0, totalLearned: learnedCount });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+app.post('/api/review/submit', authenticate, async (req, res) => {
+    try {
+        const { answers } = req.body;
+        if (!answers || !Array.isArray(answers)) {
+            return res.status(400).json({ error: 'Invalid answers format' });
+        }
+
+        const results = [];
+        const wrongAnswers = [];
+        let correctCount = 0;
+
+        for (const answer of answers) {
+            const { learningId, selectedAnswer, correctAnswer, isCorrect } = answer;
+            const updateResult = await reviewEngine.updateReviewRecord(learningId, isCorrect);
+
+            if (isCorrect) {
+                correctCount++;
+            } else {
+                wrongAnswers.push({
+                    word: correctAnswer,
+                    definition: answer.definition,
+                    pronunciation: answer.pronunciation,
+                    userAnswer: selectedAnswer
+                });
+            }
+
+            results.push({
+                learningId,
+                isCorrect,
+                nextInterval: updateResult.nextInterval
+            });
+        }
+
+        res.json({
+            total: answers.length,
+            correct: correctCount,
+            incorrect: answers.length - correctCount,
+            accuracy: answers.length > 0 ? Math.round((correctCount / answers.length) * 100) : 0,
+            wrongAnswers,
+            results
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
 });
 
 

@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import api from '../api';
-import { CheckCircle, BarChart2, Book, Volume2, LogOut, RefreshCw } from 'lucide-react';
+import { CheckCircle, BarChart2, Book, Volume2, LogOut, RefreshCw, Brain } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import ReviewQuiz from './ReviewQuiz';
 
 interface RecommendedWord {
     id: number;
@@ -23,8 +24,9 @@ const Dashboard: React.FC = () => {
     const [word, setWord] = useState<RecommendedWord | null>(null);
     const [stats, setStats] = useState<any>([]);
     const [loading, setLoading] = useState(true);
-    const [showReview, setShowReview] = useState(false); // Added showReview state
-    const navigate = useNavigate(); // Initialized useNavigate
+    const [showReview, setShowReview] = useState(false);
+    const [showReviewQuiz, setShowReviewQuiz] = useState(false);
+    const navigate = useNavigate();
 
     const fetchRecommendation = async () => {
         try {
@@ -203,15 +205,25 @@ const Dashboard: React.FC = () => {
                         <h3 className="text-lg font-bold text-white mb-4">快捷操作</h3>
                         <div className="space-y-3">
                             <button
-                                onClick={() => setShowReview(true)} // Added onClick handler
-                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3"
+                                onClick={() => setShowReviewQuiz(true)}
+                                className="w-full text-left p-4 rounded-lg bg-gradient-to-r from-emerald-600/20 to-teal-600/20 border border-emerald-500/30 hover:from-emerald-600/30 hover:to-teal-600/30 transition text-white flex items-center gap-3 group cursor-pointer"
                             >
-                                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                                复习已掌握单词
+                                <Brain size={20} className="text-emerald-400 group-hover:scale-110 transition-transform" />
+                                <div className="flex-1">
+                                    <span className="font-bold">间隔复习自测</span>
+                                    <p className="text-xs text-slate-400 mt-0.5">根据记忆曲线测试已掌握单词</p>
+                                </div>
                             </button>
                             <button
-                                onClick={() => navigate('/test')} // Added onClick handler
-                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3"
+                                onClick={() => setShowReview(true)}
+                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3 cursor-pointer"
+                            >
+                                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                                查看已掌握单词列表
+                            </button>
+                            <button
+                                onClick={() => navigate('/test')}
+                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3 cursor-pointer"
                             >
                                 <span className="w-2 h-2 rounded-full bg-amber-400"></span>
                                 重测词汇量
@@ -220,13 +232,21 @@ const Dashboard: React.FC = () => {
                     </div>
                 </div>
 
-                {/* Review Modal */}
+                {/* Review Quiz Modal */}
+                {showReviewQuiz && (
+                    <ReviewQuiz onClose={() => {
+                        setShowReviewQuiz(false);
+                        refreshData();
+                    }} />
+                )}
+
+                {/* Learned Words List Modal */}
                 {showReview && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" onClick={() => setShowReview(false)}>
                         <div className="glass-panel bg-slate-900 p-6 rounded-2xl w-full max-w-lg max-h-[80vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
                             <div className="flex justify-between items-center mb-6">
                                 <h2 className="text-2xl font-bold text-white">已掌握单词</h2>
-                                <button onClick={() => setShowReview(false)} className="text-slate-400 hover:text-white">✕</button>
+                                <button onClick={() => setShowReview(false)} className="text-slate-400 hover:text-white cursor-pointer">✕</button>
                             </div>
                             <div className="space-y-4">
                                 {stats.history && stats.history.length > 0 ? (
@@ -237,7 +257,7 @@ const Dashboard: React.FC = () => {
                                                     <h3 className="text-xl font-bold text-white">{h.word}</h3>
                                                     <p className="text-primary text-sm">{h.pronunciation}</p>
                                                 </div>
-                                                <button onClick={() => playAudio(h.word)} className="text-slate-400 hover:text-primary"><Volume2 size={18} /></button>
+                                                <button onClick={() => playAudio(h.word)} className="text-slate-400 hover:text-primary cursor-pointer"><Volume2 size={18} /></button>
                                             </div>
                                             <p className="text-slate-300 mt-2 text-sm">{h.definition}</p>
                                         </div>
