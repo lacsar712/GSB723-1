@@ -142,6 +142,32 @@ db.serialize(() => {
         FOREIGN KEY(word_id) REFERENCES words(id)
     )`);
 
+    // Review Schedule - spaced repetition state per mastered word
+    // intervalDays: 上次采用的复习间隔（天）; nextReviewAt: 下次复习时间
+    db.run(`CREATE TABLE IF NOT EXISTS review_schedule (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        word_id INTEGER,
+        interval_days INTEGER DEFAULT 1,
+        next_review_at DATETIME,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, word_id),
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(word_id) REFERENCES words(id)
+    )`);
+
+    // Review Answers - every self-test answer for wrong list & scheduling
+    db.run(`CREATE TABLE IF NOT EXISTS review_answers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER,
+        word_id INTEGER,
+        is_correct INTEGER,
+        selected_word TEXT,
+        answered_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id),
+        FOREIGN KEY(word_id) REFERENCES words(id)
+    )`);
+
     // Seed Data with UPSERT - delay to ensure migration completes
     setTimeout(() => {
         const stmt = db.prepare(`
