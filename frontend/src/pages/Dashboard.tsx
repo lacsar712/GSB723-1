@@ -210,6 +210,13 @@ const Dashboard: React.FC = () => {
                                 复习已掌握单词
                             </button>
                             <button
+                                onClick={() => navigate('/review')}
+                                className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3"
+                            >
+                                <span className="w-2 h-2 rounded-full bg-indigo-400"></span>
+                                进入复习自测
+                            </button>
+                            <button
                                 onClick={() => navigate('/test')} // Added onClick handler
                                 className="w-full text-left p-3 rounded-lg bg-slate-800/50 hover:bg-slate-800 transition text-slate-300 hover:text-white flex items-center gap-3"
                             >

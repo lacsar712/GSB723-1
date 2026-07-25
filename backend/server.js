@@ -275,10 +275,110 @@ app.get('/api/recommend/batch', authenticate, (req, res) => {
 // Mark word as learned
 app.post('/api/learn/record', authenticate, (req, res) => {
     const { word_id, status } = req.body; // status: 'learned'
-    db.run("INSERT INTO learning_history (user_id, word_id, status) VALUES (?, ?, ?)", [req.user.id, word_id, status || 'learned'], (err) => {
+    const finalStatus = status || 'learned';
+    db.run("INSERT INTO learning_history (user_id, word_id, status) VALUES (?, ?, ?)", [req.user.id, word_id, finalStatus], (err) => {
         if (err) return res.status(500).json({ error: err.message });
-        res.json({ success: true });
+
+        // 首次标记为已掌握后，默认安排在 1 天后进入复习队列
+        if (finalStatus === 'learned') {
+            db.run(`
+                INSERT INTO review_schedule (user_id, word_id, interval_days, next_review_at, updated_at)
+                VALUES (?, ?, 1, datetime('now', '+1 day'), datetime('now'))
+                ON CONFLICT(user_id, word_id) DO NOTHING
+            `, [req.user.id, word_id], (scheduleErr) => {
+                if (scheduleErr) return res.status(500).json({ error: scheduleErr.message });
+                res.json({ success: true });
+            });
+        } else {
+            res.json({ success: true });
+        }
     });
+});
+
+// Review self-test constants
+const DEFAULT_ROUND_SIZE = 5;
+const MAX_INTERVAL_DAYS = 30;
+
+// Fetch a round of review questions.
+// 优先拉取「下次复习时间已到期」的单词；不足一轮时用尚未到期的已掌握词补足。
+app.get('/api/review/session', authenticate, (req, res) => {
+    const roundSize = parseInt(req.query.size) || DEFAULT_ROUND_SIZE;
+
+    // Due words first (next_review_at <= now), then not-yet-due, ordered by soonest.
+    const sql = `
+        SELECT w.id, w.word, w.pronunciation, w.pos, w.definition, w.example,
+               rs.next_review_at,
+               CASE WHEN rs.next_review_at <= datetime('now') THEN 0 ELSE 1 END as not_due
+        FROM review_schedule rs
+        JOIN words w ON rs.word_id = w.id
+        WHERE rs.user_id = ?
+        ORDER BY not_due ASC, rs.next_review_at ASC
+        LIMIT ?
+    `;
+
+    db.all(sql, [req.user.id, roundSize], (err, words) => {
+        if (err) return res.status(500).json({ error: err.message });
+
+        // Distractor pool: other english words used to build 4-option choices on the client.
+        db.all("SELECT word FROM words", (poolErr, pool) => {
+            if (poolErr) return res.status(500).json({ error: poolErr.message });
+            res.json({
+                roundSize,
+                words: words || [],
+                distractorPool: (pool || []).map(p => p.word)
+            });
+        });
+    });
+});
+
+// Record a single review answer and update the spaced-repetition schedule.
+app.post('/api/review/answer', authenticate, (req, res) => {
+    const { word_id, is_correct, selected_word } = req.body;
+    if (!word_id) return res.status(400).json({ error: "缺少 word_id" });
+
+    const correct = is_correct ? 1 : 0;
+
+    db.run(
+        "INSERT INTO review_answers (user_id, word_id, is_correct, selected_word) VALUES (?, ?, ?, ?)",
+        [req.user.id, word_id, correct, selected_word || null],
+        (insertErr) => {
+            if (insertErr) return res.status(500).json({ error: insertErr.message });
+
+            db.get(
+                "SELECT interval_days FROM review_schedule WHERE user_id = ? AND word_id = ?",
+                [req.user.id, word_id],
+                (getErr, row) => {
+                    if (getErr) return res.status(500).json({ error: getErr.message });
+
+                    const currentInterval = row ? row.interval_days : 1;
+                    let nextInterval;
+                    let nextReviewExpr;
+
+                    if (correct) {
+                        // 答对：下一次间隔变为「上次间隔 × 2」（上限 30 天）推迟
+                        nextInterval = Math.min(currentInterval * 2, MAX_INTERVAL_DAYS);
+                        nextReviewExpr = `datetime('now', '+${nextInterval} day')`;
+                    } else {
+                        // 答错：重置为当天并重新进入优先复习队列
+                        nextInterval = 1;
+                        nextReviewExpr = `datetime('now')`;
+                    }
+
+                    db.run(`
+                        INSERT INTO review_schedule (user_id, word_id, interval_days, next_review_at, updated_at)
+                        VALUES (?, ?, ?, ${nextReviewExpr}, datetime('now'))
+                        ON CONFLICT(user_id, word_id) DO UPDATE SET
+                            interval_days = excluded.interval_days,
+                            next_review_at = excluded.next_review_at,
+                            updated_at = datetime('now')
+                    `, [req.user.id, word_id, nextInterval], (upErr) => {
+                        if (upErr) return res.status(500).json({ error: upErr.message });
+                        res.json({ success: true, interval_days: nextInterval });
+                    });
+                }
+            );
+        }
+    );
 });
 
 // Statistics
